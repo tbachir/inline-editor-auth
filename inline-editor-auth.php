@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Plugin Name: Inline Editor Magic Auth
  * Description: Ajoute l’authentification Magic Link + JWT pour Inline Editor CMS.
@@ -11,11 +12,29 @@ if (!defined('ABSPATH')) exit;
 
 require_once plugin_dir_path(__FILE__) . 'includes/class-authentification.php';
 
-class Inline_Editor_Auth_Plugin {
+class Inline_Editor_Auth_Plugin
+{
 
-    public function __construct() {
+    public function __construct()
+    {
         // Remplace l’icône “maison” (accès front) par le Magic Link
         add_action('admin_bar_menu', [$this, 'replace_frontend_link_with_magic_link'], 20);
+        add_action('admin_bar_menu', function ($wp_admin_bar) {
+            if (!is_user_logged_in() || !current_user_can('read')) return;
+
+            $magic_link = admin_url('admin-post.php?action=generate_magic_link');
+            if (is_wp_error($magic_link)) return;
+
+            $node = $wp_admin_bar->get_node('site-name');
+            if ($node) {
+                $wp_admin_bar->add_node([
+                    'id'     => 'site-name',
+                    'title'  => $node->title, // conserve l'icône et le nom
+                    'href'   => esc_url($magic_link),
+                    'meta'   => array_merge($node->meta ?? [], ['target' => '_blank']),
+                ]);
+            }
+        }, 2000);
         // Ajoute un bouton dédié “Magic Link (Front)” à droite
         add_action('admin_bar_menu', [$this, 'add_admin_bar_magic_link'], 100);
         // Ajoute la page de réglages
@@ -23,15 +42,31 @@ class Inline_Editor_Auth_Plugin {
         add_action('admin_init', [$this, 'register_settings']);
         // Ajoute la page de debug
         add_action('admin_menu', [$this, 'add_debug_page']);
+
+        add_action('admin_head', function () {
+?>
+            <style>
+                /* Exemple : bordure verte autour de la maison */
+                #wp-admin-bar-site-name>.ab-item {
+                    border: 2px solid #27ae60 !important;
+                    border-radius: 4px;
+                    padding: 0 6px !important;
+                    /* Ajoute ici toutes tes règles custom */
+                }
+            </style>
+        <?php
+        });
+        add_action('admin_post_generate_magic_link', [$this, 'handle_generate_magic_link']);
     }
 
     /**
      * Remplace le lien du front (icône maison) dans la barre d’admin par le magic link.
      */
-    public function replace_frontend_link_with_magic_link($wp_admin_bar) {
+    public function replace_frontend_link_with_magic_link($wp_admin_bar)
+    {
         if (!is_user_logged_in() || !current_user_can('read')) return;
 
-        $magic_link = Authentification::generate_magic_link();
+        $magic_link = admin_url('admin-post.php?action=generate_magic_link');
         if (is_wp_error($magic_link)) return;
 
         $node = $wp_admin_bar->get_node('site-name');
@@ -48,25 +83,27 @@ class Inline_Editor_Auth_Plugin {
     /**
      * Ajoute un bouton “Magic Link (Front)” dans la barre d’admin
      */
-    public function add_admin_bar_magic_link($admin_bar) {
+    public function add_admin_bar_magic_link($admin_bar)
+    {
         if (!is_user_logged_in() || !current_user_can('edit_posts')) {
             return;
         }
-        $link = Authentification::generate_magic_link();
+        $link = admin_url('admin-post.php?action=generate_magic_link');
         if (is_wp_error($link)) return;
         $admin_bar->add_node([
             'id'    => 'magic-link',
             'title' => __('🔑 Magic Link (Front)', 'inline-editor-auth'),
             'href'  => esc_url($link),
             'meta'  => ['target' => '_blank', 'title' => __('Ouvre le front avec magic link', 'inline-editor-auth')],
-            'parent'=> false,
+            'parent' => false,
         ]);
     }
 
     /**
      * Ajoute la page de réglages au menu Réglages
      */
-    public function add_settings_page() {
+    public function add_settings_page()
+    {
         add_options_page(
             __('Réglages Magic Link', 'inline-editor-auth'),
             __('Magic Link Auth', 'inline-editor-auth'),
@@ -79,19 +116,25 @@ class Inline_Editor_Auth_Plugin {
     /**
      * Déclare les settings pour frontend_url et jwt_duration
      */
-    public function register_settings() {
+    public function register_settings()
+    {
         register_setting('inline_editor_auth_group', 'frontend_url', [
-            'type' => 'string', 'sanitize_callback' => 'esc_url_raw', 'default' => 'http://localhost:5173'
+            'type' => 'string',
+            'sanitize_callback' => 'esc_url_raw',
+            'default' => 'http://localhost:5173'
         ]);
         register_setting('inline_editor_auth_group', 'jwt_duration', [
-            'type' => 'integer', 'sanitize_callback' => 'absint', 'default' => 300 // 5h en minutes
+            'type' => 'integer',
+            'sanitize_callback' => 'absint',
+            'default' => 300 // 5h en minutes
         ]);
     }
 
     /**
      * Affiche la page de configuration
      */
-    public function render_settings_page() {
+    public function render_settings_page()
+    {
         ?>
         <div class="wrap">
             <h1><?php _e('Réglages Magic Link', 'inline-editor-auth'); ?></h1>
@@ -111,13 +154,29 @@ class Inline_Editor_Auth_Plugin {
                 <?php submit_button(); ?>
             </form>
         </div>
-        <?php
+    <?php
+    }
+    /**
+     * Gère la génération du magic link via une action admin_post
+     */
+    public function handle_generate_magic_link()
+    {
+        if (!is_user_logged_in() || !current_user_can('edit_posts')) {
+            wp_die(__('Non autorisé', 'inline-editor-auth'), 403);
+        }
+        $magic_link = Authentification::generate_magic_link();
+        if (is_wp_error($magic_link)) {
+            wp_die(esc_html($magic_link->get_error_message()), 500);
+        }
+        wp_redirect($magic_link);
+        exit;
     }
 
     /**
      * Ajoute la page de debug au menu Réglages
      */
-    public function add_debug_page() {
+    public function add_debug_page()
+    {
         add_submenu_page(
             'options-general.php',
             __('Magic Link Debug', 'inline-editor-auth'),
@@ -131,12 +190,13 @@ class Inline_Editor_Auth_Plugin {
     /**
      * Affiche la page de debug
      */
-    public function render_debug_page() {
+    public function render_debug_page()
+    {
         $user = wp_get_current_user();
         $frontend_url = get_option('frontend_url', 'http://localhost:5173');
         $jwt_duration = get_option('jwt_duration', 300);
         $jwt = Authentification::generate_jwt();
-        $magic_link = Authentification::generate_magic_link();
+        $magic_link = admin_url('admin-post.php?action=generate_magic_link');
         $jwt_decoded = null;
         $jwt_error = null;
 
@@ -155,7 +215,7 @@ class Inline_Editor_Auth_Plugin {
             $jwt_error = __('Librairie JWT manquante', 'inline-editor-auth');
         }
 
-        ?>
+    ?>
         <div class="wrap">
             <h1><?php _e('Magic Link Debug', 'inline-editor-auth'); ?></h1>
             <table class="widefat" style="max-width:700px;">
@@ -210,7 +270,7 @@ class Inline_Editor_Auth_Plugin {
                 </tbody>
             </table>
         </div>
-        <?php
+<?php
     }
 }
 
