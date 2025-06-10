@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Inline Editor Magic Auth
  * Description: Ajoute l’authentification Magic Link + JWT pour Inline Editor CMS.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: Tarek Bachir
  * Text Domain: inline-editor-auth
  */
@@ -17,86 +17,51 @@ class Inline_Editor_Auth_Plugin
 
     public function __construct()
     {
-        // Remplace l’icône “maison” (accès front) par le Magic Link
-        add_action('admin_bar_menu', [$this, 'replace_frontend_link_with_magic_link'], 20);
-        add_action('admin_bar_menu', function ($wp_admin_bar) {
-            if (!is_user_logged_in() || !current_user_can('read')) return;
-
-            $magic_link = admin_url('admin-post.php?action=generate_magic_link');
-            if (is_wp_error($magic_link)) return;
-
-            $node = $wp_admin_bar->get_node('site-name');
-            if ($node) {
-                $wp_admin_bar->add_node([
-                    'id'     => 'site-name',
-                    'title'  => $node->title, // conserve l'icône et le nom
-                    'href'   => esc_url($magic_link),
-                    'meta'   => array_merge($node->meta ?? [], ['target' => '_blank']),
-                ]);
-            }
-        }, 2000);
-        // Ajoute un bouton dédié “Magic Link (Front)” à droite
-        add_action('admin_bar_menu', [$this, 'add_admin_bar_magic_link'], 100);
-        // Ajoute la page de réglages
+        // Barre d’admin : maison (site-name) et bouton Magic Link → endpoint dynamique
+        add_action('admin_bar_menu', [$this, 'replace_frontend_link_with_magic_link'], 2000);
+        // Réglages
         add_action('admin_menu', [$this, 'add_settings_page']);
         add_action('admin_init', [$this, 'register_settings']);
-        // Ajoute la page de debug
+        // Page de debug
         add_action('admin_menu', [$this, 'add_debug_page']);
-
-        add_action('admin_head', function () {
-?>
-            <style>
-                /* Exemple : bordure verte autour de la maison */
-                #wp-admin-bar-site-name>.ab-item {
-                    border: 2px solid #27ae60 !important;
-                    border-radius: 4px;
-                    padding: 0 6px !important;
-                    /* Ajoute ici toutes tes règles custom */
-                }
-            </style>
-        <?php
-        });
+        // Endpoint sécurisé pour générer/rediriger Magic Link
         add_action('admin_post_generate_magic_link', [$this, 'handle_generate_magic_link']);
+        // CSS custom admin (optionnel, personnalise ici)
+        add_action('admin_head', [$this, 'custom_admin_css']);
     }
 
     /**
-     * Remplace le lien du front (icône maison) dans la barre d’admin par le magic link.
+     * Maison (site-name) redirige vers le endpoint dynamique.
      */
     public function replace_frontend_link_with_magic_link($wp_admin_bar)
     {
         if (!is_user_logged_in() || !current_user_can('read')) return;
-
-        $magic_link = admin_url('admin-post.php?action=generate_magic_link');
-        if (is_wp_error($magic_link)) return;
 
         $node = $wp_admin_bar->get_node('site-name');
         if ($node) {
             $wp_admin_bar->add_node([
                 'id'     => 'site-name',
                 'title'  => $node->title,
-                'href'   => esc_url($magic_link),
+                'href'   => admin_url('admin-post.php?action=generate_magic_link'),
                 'meta'   => array_merge($node->meta ?? [], ['target' => '_blank']),
             ]);
         }
     }
 
     /**
-     * Ajoute un bouton “Magic Link (Front)” dans la barre d’admin
+     * Endpoint : génère le magic link et redirige vers le front.
      */
-    public function add_admin_bar_magic_link($admin_bar)
+    public function handle_generate_magic_link()
     {
         if (!is_user_logged_in() || !current_user_can('edit_posts')) {
-            return;
+            wp_die(__('Non autorisé', 'inline-editor-auth'), 403);
         }
-        $link = admin_url('admin-post.php?action=generate_magic_link');
-        if (is_wp_error($link)) return;
-        $admin_bar->add_node([
-            'id'    => 'magic-link',
-            'title' => __('🔑 Magic Link (Front)', 'inline-editor-auth'),
-            'href'  => esc_url($link),
-            'meta'  => ['target' => '_blank', 'title' => __('Ouvre le front avec magic link', 'inline-editor-auth')],
-            'parent' => false,
-        ]);
+        $magic_link = Authentification::generate_magic_link();
+        if (is_wp_error($magic_link)) {
+            wp_die(esc_html($magic_link->get_error_message()), 500);
+        }
+        wp_redirect($magic_link);
+        exit;
     }
 
     /**
@@ -135,7 +100,7 @@ class Inline_Editor_Auth_Plugin
      */
     public function render_settings_page()
     {
-        ?>
+?>
         <div class="wrap">
             <h1><?php _e('Réglages Magic Link', 'inline-editor-auth'); ?></h1>
             <form method="post" action="options.php">
@@ -156,21 +121,6 @@ class Inline_Editor_Auth_Plugin
         </div>
     <?php
     }
-    /**
-     * Gère la génération du magic link via une action admin_post
-     */
-    public function handle_generate_magic_link()
-    {
-        if (!is_user_logged_in() || !current_user_can('edit_posts')) {
-            wp_die(__('Non autorisé', 'inline-editor-auth'), 403);
-        }
-        $magic_link = Authentification::generate_magic_link();
-        if (is_wp_error($magic_link)) {
-            wp_die(esc_html($magic_link->get_error_message()), 500);
-        }
-        wp_redirect($magic_link);
-        exit;
-    }
 
     /**
      * Ajoute la page de debug au menu Réglages
@@ -188,33 +138,14 @@ class Inline_Editor_Auth_Plugin
     }
 
     /**
-     * Affiche la page de debug
+     * Affiche la page de debug (affiche le lien vers l'endpoint dynamique : un seul token émis si clic)
      */
     public function render_debug_page()
     {
         $user = wp_get_current_user();
         $frontend_url = get_option('frontend_url', 'http://localhost:5173');
         $jwt_duration = get_option('jwt_duration', 300);
-        $jwt = Authentification::generate_jwt();
-        $magic_link = admin_url('admin-post.php?action=generate_magic_link');
-        $jwt_decoded = null;
-        $jwt_error = null;
-
-        if (is_wp_error($jwt)) {
-            $jwt_error = $jwt->get_error_message();
-        } elseif (class_exists('\Tmeister\Firebase\JWT\JWT')) {
-            try {
-                // Décodage du token pour affichage (attention, pour debug uniquement !)
-                $key = defined('JWT_AUTH_SECRET_KEY') ? JWT_AUTH_SECRET_KEY : '';
-                $algorithm = (new Authentification())->get_algorithm();
-                $jwt_decoded = \Tmeister\Firebase\JWT\JWT::decode($jwt, new \Tmeister\Firebase\JWT\Key($key, $algorithm));
-            } catch (\Exception $e) {
-                $jwt_error = $e->getMessage();
-            }
-        } else {
-            $jwt_error = __('Librairie JWT manquante', 'inline-editor-auth');
-        }
-
+        $admin_url = admin_url('admin-post.php?action=generate_magic_link');
     ?>
         <div class="wrap">
             <h1><?php _e('Magic Link Debug', 'inline-editor-auth'); ?></h1>
@@ -237,39 +168,31 @@ class Inline_Editor_Auth_Plugin
                         </td>
                     </tr>
                     <tr>
-                        <th><?php _e('Magic Link', 'inline-editor-auth'); ?></th>
+                        <th><?php _e('Lien dynamique Magic Link', 'inline-editor-auth'); ?></th>
                         <td>
-                            <?php if (!is_wp_error($magic_link)) : ?>
-                                <input type="text" value="<?php echo esc_attr($magic_link); ?>" readonly style="width:100%;">
-                                <a href="<?php echo esc_url($magic_link); ?>" target="_blank" class="button"><?php _e('Ouvrir', 'inline-editor-auth'); ?></a>
-                            <?php else: ?>
-                                <span style="color:red;"><?php echo esc_html($magic_link->get_error_message()); ?></span>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th><?php _e('JWT', 'inline-editor-auth'); ?></th>
-                        <td>
-                            <?php if ($jwt_error) : ?>
-                                <span style="color:red;"><?php echo esc_html($jwt_error); ?></span>
-                            <?php else: ?>
-                                <textarea readonly style="width:100%;" rows="2"><?php echo esc_html($jwt); ?></textarea>
-                            <?php endif; ?>
-                        </td>
-                    </tr>
-                    <tr>
-                        <th><?php _e('Payload JWT décodé', 'inline-editor-auth'); ?></th>
-                        <td>
-                            <?php if ($jwt_decoded) : ?>
-                                <pre style="max-width:100%;overflow:auto;"><?php echo esc_html(print_r($jwt_decoded, true)); ?></pre>
-                            <?php else: ?>
-                                <em><?php _e('Aucun payload disponible ou JWT invalide.', 'inline-editor-auth'); ?></em>
-                            <?php endif; ?>
+                            <input type="text" value="<?php echo esc_attr($admin_url); ?>" readonly style="width:100%;">
+                            <a href="<?php echo esc_url($admin_url); ?>" target="_blank" class="button"><?php _e('Générer & ouvrir', 'inline-editor-auth'); ?></a>
+                            <em style="display:block;color:#888;font-size:0.95em;"><?php _e('Le JWT/Magic Link ne sera généré qu’au clic.', 'inline-editor-auth'); ?></em>
                         </td>
                     </tr>
                 </tbody>
             </table>
         </div>
+    <?php
+    }
+
+    /**
+     * CSS custom pour admin (adapte à ton goût)
+     */
+    public function custom_admin_css()
+    {
+    ?>
+        <style>
+            #wpadminbar li.hover>.ab-sub-wrapper,
+            #wpadminbar.nojs li:hover>.ab-sub-wrapper {
+                display: none !important;
+            }
+        </style>
 <?php
     }
 }
