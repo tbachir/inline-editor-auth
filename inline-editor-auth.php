@@ -3,7 +3,7 @@
 /**
  * Plugin Name: Inline Editor Magic Auth
  * Description: Ajoute l’authentification Magic Link + JWT pour Inline Editor CMS.
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: Tarek Bachir
  * Text Domain: inline-editor-auth
  */
@@ -79,7 +79,7 @@ class Inline_Editor_Auth_Plugin
     }
 
     /**
-     * Déclare les settings pour frontend_url et jwt_duration
+     * Déclare les settings pour frontend_url, jwt_duration et cors_allowed_origins
      */
     public function register_settings()
     {
@@ -92,6 +92,12 @@ class Inline_Editor_Auth_Plugin
             'type' => 'integer',
             'sanitize_callback' => 'absint',
             'default' => 300 // 5h en minutes
+        ]);
+        // Nouveau réglage pour CORS
+        register_setting('inline_editor_auth_group', 'cors_allowed_origins', [
+            'type' => 'string',
+            'sanitize_callback' => 'sanitize_text_field',
+            'default' => 'http://localhost:5173'
         ]);
     }
 
@@ -114,6 +120,13 @@ class Inline_Editor_Auth_Plugin
                     <tr>
                         <th scope="row"><label for="jwt_duration"><?php _e('Durée du token (minutes)', 'inline-editor-auth'); ?></label></th>
                         <td><input type="number" id="jwt_duration" name="jwt_duration" value="<?php echo esc_attr(get_option('jwt_duration', 300)); ?>" min="5" max="1440" step="5"></td>
+                    </tr>
+                    <tr>
+                        <th scope="row"><label for="cors_allowed_origins"><?php _e('Origines CORS autorisées', 'inline-editor-auth'); ?></label></th>
+                        <td>
+                            <input type="text" id="cors_allowed_origins" name="cors_allowed_origins" value="<?php echo esc_attr(get_option('cors_allowed_origins', 'http://localhost:5173')); ?>" class="regular-text ltr" required>
+                            <p class="description"><?php _e('Liste d\'origines séparées par des virgules. Exemple : https://www.monsite.com, http://localhost:5173', 'inline-editor-auth'); ?></p>
+                        </td>
                     </tr>
                 </table>
                 <?php submit_button(); ?>
@@ -198,3 +211,24 @@ class Inline_Editor_Auth_Plugin
 }
 
 new Inline_Editor_Auth_Plugin();
+
+
+// === Gestion CORS sécurisée, configurable via admin ===
+add_action('rest_api_init', function () {
+    // Lis la config depuis les options WP
+    $origins = get_option('cors_allowed_origins', 'http://localhost:5173');
+    $allowed_origins = array_map('trim', explode(',', $origins));
+
+    if (isset($_SERVER['HTTP_ORIGIN']) && in_array($_SERVER['HTTP_ORIGIN'], $allowed_origins, true)) {
+        header('Access-Control-Allow-Origin: ' . $_SERVER['HTTP_ORIGIN']);
+        header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
+        header('Access-Control-Allow-Headers: Authorization, Content-Type, cache-control, X-Requested-With');
+        header('Access-Control-Allow-Credentials: true');
+    }
+
+    // Pour le preflight (OPTIONS), on peut répondre direct :
+    if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        status_header(200);
+        exit;
+    }
+});
